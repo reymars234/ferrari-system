@@ -545,6 +545,11 @@ function clearError(errorDivId, pwInputId) {
     document.getElementById(pwInputId).style.borderColor = '#2a2a2a';
 }
 
+// ─── Get fresh CSRF token (meta tag → fallback to blade var) ───
+function getCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? CSRF;
+}
+
 async function verifyAndProceed({ passwordInputId, errorDivId, errorMsgId, btnId, iconId, textId, spinnerId, onSuccess }) {
     const pw = document.getElementById(passwordInputId).value.trim();
     if (!pw) {
@@ -555,12 +560,28 @@ async function verifyAndProceed({ passwordInputId, errorDivId, errorMsgId, btnId
     setLoading(btnId, iconId, textId, spinnerId, true);
     clearError(errorDivId, passwordInputId);
     try {
-        const res  = await fetch(VERIFY_URL, {
+        const res = await fetch(VERIFY_URL, {
             method : 'POST',
-            headers: { 'Content-Type':'application/json', 'Accept':'application/json', 'X-CSRF-TOKEN': CSRF },
-            body   : JSON.stringify({ password: pw }),
+            headers: {
+                'Content-Type' : 'application/json',
+                'Accept'       : 'application/json',
+                'X-CSRF-TOKEN' : getCsrfToken(),   // ← FIXED: always fresh token
+            },
+            body: JSON.stringify({ password: pw }),
         });
+
+        // Handle non-JSON error responses (419 session expired, 500, etc.)
+        if (!res.ok && res.status !== 401) {
+            const statusMessages = {
+                419: 'Session expired. Please refresh the page and try again.',
+                500: 'Server error. Please try again.',
+                403: 'Forbidden. Please refresh the page.',
+            };
+            throw new Error(statusMessages[res.status] ?? `Server error (${res.status}). Please refresh the page.`);
+        }
+
         const data = await res.json();
+
         if (!data.verified) {
             setLoading(btnId, iconId, textId, spinnerId, false);
             showError(errorDivId, errorMsgId, passwordInputId, data.message || 'Incorrect password. Please try again.');
@@ -568,10 +589,12 @@ async function verifyAndProceed({ passwordInputId, errorDivId, errorMsgId, btnId
             document.getElementById(passwordInputId).focus();
             return;
         }
+
         onSuccess();
+
     } catch (err) {
         setLoading(btnId, iconId, textId, spinnerId, false);
-        showError(errorDivId, errorMsgId, passwordInputId, 'Something went wrong. Please try again.');
+        showError(errorDivId, errorMsgId, passwordInputId, err.message || 'Something went wrong. Please refresh and try again.');
     }
 }
 
